@@ -1,410 +1,189 @@
 Setting Up Simulations
 ======================
 
-This guide covers how to set up and run FDTD simulations using the ``gds_fdtd`` package, from loading GDS files to configuring simulation parameters and executing simulations.
+From a GDS layout to S-parameters in four steps, on any engine.
 
-Workflow Overview
+1. Load the layout
+------------------
+
+.. code-block:: python
+
+    from gds_fdtd.technology import Technology
+    from gds_fdtd.lyprocessor import load_cell
+    from gds_fdtd.simprocessor import load_component_from_tech
+
+    tech = Technology.from_yaml("examples/tech.yaml")
+    cell, layout = load_cell("examples/devices.gds", top_cell="crossing_te1550")
+    component = load_component_from_tech(cell=cell, tech=tech)
+
+Ports are auto-detected from the SiEPIC pin convention (never hand-placed).
+gdsfactory (>= 9) components convert directly:
+
+.. code-block:: python
+
+    import gdsfactory as gf
+    from gds_fdtd.layout.gdsfactory import from_gdsfactory
+
+    gf.gpdk.PDK.activate()
+    component = from_gdsfactory(gf.components.straight(length=5), tech)
+
+``plot_component(component, spec=spec)`` shows what you loaded, device polygons,
+the auto-detected ports, the DevRec bounds, and the FDTD region:
+
+.. figure:: images/ybranch_geometry.png
+   :width: 80%
+   :align: center
+
+2. Configure with SimulationSpec
+--------------------------------
+
+Every numeric setting lives in one validated model (lengths in µm, angles
+in degrees, frequencies in Hz, package-wide):
+
+.. code-block:: python
+
+    from gds_fdtd.spec import SimulationSpec
+
+    spec = SimulationSpec(
+        wavelength_start=1.5,
+        wavelength_end=1.6,
+        wavelength_points=51,
+        mesh=10,                      # grid cells per wavelength
+        boundary=("PML", "PML", "Metal"),
+        symmetry=(0, 0, 0),
+        z_min=-1.0,
+        z_max=1.11,
+        modes=(1, 2),                 # TE + TM
+        field_monitors=("z",),
+    )
+
+Bad values fail loudly at construction with the offending field named.
+
+Field monitors are steerable: one plane per axis in ``field_monitors``
+(``"z"`` top view, ``"y"``/``"x"`` side views), each sitting at the domain
+center (x/y) or the device layers' average mid-plane (z) unless
+``field_monitor_positions`` pins it to an absolute coordinate. On tidy3d,
+``field_monitor_wavelengths`` restricts what the monitors record, so a dense
+S-parameter spectrum does not force an equally dense field download. See
+where every plane sits before running anything:
+
+.. code-block:: python
+
+    spec = SimulationSpec(
+        field_monitors=("y", "z"),
+        field_monitor_positions={"z": 0.11},      # pin to the Si-core mid-plane
+        field_monitor_wavelengths=(1.545, 1.59),  # record just these [um]
+    )
+
+    from gds_fdtd.plotting import plot_monitor_planes
+    plot_monitor_planes(solver)   # offline: domain, layers, every plane labelled
+
+:doc:`_notebooks/05b_field_monitors` walks through the placement machinery on
+the Si→SiN escalator, and :doc:`_notebooks/11_bragg_grating` uses the
+wavelength selection to watch one device reflect in-band and transmit
+out-of-band from a single run.
+
+The whole setup also renders as an **interactive 3D scene** — the extruded
+layer stack with per-layer colors, the port cones, each port's mode plane at
+its real ``width_ports × depth_ports`` (with a dimensions label), the
+extension stubs, the monitor planes, and the domain box; orbit, zoom, click an
+object for its material and z-extent, and toggle groups from the legend:
+
+.. code-block:: python
+
+    from gds_fdtd.viewer3d import show_3d, save_3d, render_static
+
+    show_3d(solver)                     # notebooks AND these docs (three.js)
+    save_3d(solver, "device_3d.html")   # standalone shareable page
+    render_static(solver)               # matplotlib, for JS-free contexts
+
+The scene shows **true 1:1:1 proportions** by default (a 220 nm layer really is
+hair-thin beside a many-µm device); the legend's *z ×4* checkbox exaggerates
+the vertical axis when you want to inspect a thin stack. ``render_static``
+draws the identical scene with matplotlib for the README and other JS-free
+contexts:
+
+.. figure:: images/escalator_3d.png
+   :width: 90%
+   :align: center
+
+   ``render_static`` of the Si→SiN escalator solver: the two cores, the
+   translucent cladding, the port mode planes, the monitor planes, and the
+   domain box — the same scene ``show_3d`` renders interactively.
+
+The 3D views embedded in :doc:`_notebooks/01_layout_to_component`,
+:doc:`_notebooks/05b_field_monitors`, and :doc:`_notebooks/11_bragg_grating`
+are live — try them.
+
+3. Validate, build, estimate, all free
+---------------------------------------
+
+.. code-block:: python
+
+    from gds_fdtd.solvers import get_solver
+
+    solver = get_solver("tidy3d")(component, technology=tech, spec=spec)
+    print(solver.describe())
+    assert solver.validate() == []
+    artifacts = solver.build()       # offline: full native scene / setup script
+    print(solver.estimate())
+
+Nothing so far cost anything: no cloud tasks, no license checkout.
+
+4. Run and analyze
+------------------
+
+.. code-block:: python
+
+    smatrix = solver.run()                        # the only spending step
+    smatrix.is_reciprocal(), smatrix.is_passive() # physics checks
+    smatrix.to_dat("device.dat")                  # -> INTERCONNECT
+    smatrix.to_touchstone("device.s4p")           # -> scikit-rf & friends
+
+    from gds_fdtd.plotting import plot_smatrix
+    plot_smatrix(smatrix, kind="db")
+    solver.plot_fields(axis="z")
+
+.. figure:: images/ybranch_sparams.png
+   :width: 80%
+   :align: center
+
+   ``plot_smatrix``, every measured path in dB. This y-branch splits its input
+   near −3 dB into each arm.
+
+.. figure:: images/ybranch_field.png
+   :width: 85%
+   :align: center
+
+   ``solver.plot_fields(axis="z")``, the ``|E|²`` field in the device plane,
+   the mode splitting one input into two.
+
+Choosing the mesh
 -----------------
 
-The typical simulation workflow follows these steps:
-
-1. **Load GDS layout** and extract the target cell
-2. **Load technology file** defining materials and layers
-3. **Create component** from layout and technology
-4. **Initialize solver** with simulation parameters
-5. **Run simulation** and analyze results
-
-Basic Simulation Setup
-----------------------
-
-Loading GDS and Technology
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-First, load your GDS file and technology definition:
+Sweep the mesh and let the S-matrix convergence decide. With a cache directory,
+repeating a sweep never re-spends:
 
 .. code-block:: python
 
-    import os
-    from gds_fdtd.core import parse_yaml_tech
-    from gds_fdtd.simprocessor import load_component_from_tech
-    from gds_fdtd.lyprocessor import load_cell
-    
-    # Load technology file
-    tech_path = "examples/tech_tidy3d.yaml"
-    technology = parse_yaml_tech(tech_path)
-    
-    # Load GDS file and extract cell
-    gds_file = "examples/devices.gds"
-    cell, layout = load_cell(gds_file, top_cell='crossing_te1550')
-    
-    # Create component from cell and technology
-    component = load_component_from_tech(cell=cell, tech=technology)
+    from gds_fdtd.convergence import sweep
 
-Component Analysis
-^^^^^^^^^^^^^^^^^^
+    report = sweep(get_solver("tidy3d"), component, tech, spec,
+                   field="mesh", values=[6, 8, 10], cache_dir=".gds_fdtd_cache")
+    print(report.summary())
+    report.recommend(tol_db=0.05)    # first value that moved < 0.05 dB
 
-Inspect the loaded component:
-
-.. code-block:: python
-
-    # Component information
-    print(f"Component name: {component.name}")
-    print(f"Number of ports: {len(component.ports)}")
-    print(f"Number of structures: {len(component.structures)}")
-    
-    # Port information
-    for i, port in enumerate(component.ports):
-        print(f"Port {i+1}: {port.name} at ({port.center[0]:.2f}, {port.center[1]:.2f}) μm")
-        print(f"  Direction: {port.direction}° Width: {port.width:.2f} μm")
-    
-    # Simulation bounds
-    print(f"Bounds: {component.bounds.x_span:.2f} × {component.bounds.y_span:.2f} μm")
-
-Solver Configuration
-^^^^^^^^^^^^^^^^^^^^
-
-Configure the solver with appropriate parameters:
-
-.. code-block:: python
-
-    from gds_fdtd.solver_tidy3d import fdtd_solver_tidy3d
-    
-    solver = fdtd_solver_tidy3d(
-        component=component,
-        tech=technology,
-        port_input=[component.ports[0]],  # Active ports for excitation
-        wavelength_start=1.50,            # Start wavelength (μm)
-        wavelength_end=1.60,              # End wavelength (μm)  
-        wavelength_points=101,            # Number of wavelength points
-        mesh=15,                          # Mesh cells per wavelength
-        modes=[1, 2],                     # Mode indices (TE, TM)
-        field_monitors=["z"],             # Field monitor axes
-        working_dir="./simulation_results"
-    )
-
-Simulation Parameters
----------------------
-
-Wavelength Configuration
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-Configure the wavelength range and resolution:
-
-.. code-block:: python
-
-    # Broadband simulation
-    solver = fdtd_solver_tidy3d(
-        wavelength_start=1.45,  # Start wavelength
-        wavelength_end=1.65,    # End wavelength
-        wavelength_points=201,  # High resolution
-        # ... other parameters
-    )
-    
-    # Narrowband simulation
-    solver = fdtd_solver_tidy3d(
-        wavelength_start=1.549,  # Near target wavelength
-        wavelength_end=1.551,    # Narrow range
-        wavelength_points=21,    # Sufficient points
-        # ... other parameters
-    )
-
-Mesh Configuration
-^^^^^^^^^^^^^^^^^^
-
-The mesh parameter controls simulation accuracy vs. computational cost:
-
-.. code-block:: python
-
-    # Coarse mesh (faster, less accurate)
-    mesh=10  # 10 cells per wavelength
-    
-    # Standard mesh (balanced)
-    mesh=15  # 15 cells per wavelength (recommended)
-    
-    # Fine mesh (slower, more accurate)
-    mesh=20  # 20 cells per wavelength
-
-Boundary Conditions
-^^^^^^^^^^^^^^^^^^^
-
-Configure boundary conditions for different solver types:
-
-.. code-block:: python
-
-    # Tidy3D (automatic PML boundaries)
-    solver_tidy3d = fdtd_solver_tidy3d(
-        # Boundaries handled automatically
-        symmetry=[0, 0, 0],  # No symmetry
-        # ... other parameters
-    )
-    
-    # Lumerical (explicit boundary configuration)
-    solver_lumerical = fdtd_solver_lumerical(
-        boundary=["PML", "PML", "PML"],     # PML on all boundaries
-        symmetry=[0, 1, 0],                 # Mirror symmetry in Y
-        # ... other parameters
-    )
-
-Simulation Domain
-^^^^^^^^^^^^^^^^^
-
-The simulation domain is automatically calculated but can be controlled:
-
-.. code-block:: python
-
-    solver = fdtd_solver_tidy3d(
-        z_min=-1.0,        # Bottom of simulation domain (μm)
-        z_max=1.5,         # Top of simulation domain (μm)
-        buffer=1.0,        # Buffer around component (μm)
-        width_ports=3.0,   # Port width (μm)
-        depth_ports=2.0,   # Port depth in Z (μm)
-        # ... other parameters
-    )
-
-Port Configuration
-^^^^^^^^^^^^^^^^^^
-
-Configure which ports to excite:
-
-.. code-block:: python
-
-    # Single port excitation
-    solver = fdtd_solver_tidy3d(
-        port_input=[component.ports[0]],  # Excite only first port
-        # ... other parameters
-    )
-    
-    # Multiple port excitation
-    solver = fdtd_solver_tidy3d(
-        port_input=[component.ports[0], component.ports[2]],  # Excite ports 1 and 3
-        # ... other parameters
-    )
-    
-    # All ports (for full S-matrix)
-    solver = fdtd_solver_tidy3d(
-        port_input=component.ports,  # Excite all ports
-        # ... other parameters
-    )
-
-Field Monitoring
-^^^^^^^^^^^^^^^^
-
-Configure field monitors for visualization:
-
-.. code-block:: python
-
-    # Single axis monitoring
-    field_monitors=["z"]           # Monitor Z-normal plane
-    
-    # Multiple axes
-    field_monitors=["x", "y", "z"]  # Monitor all axes
-    
-    # No field monitoring (faster)
-    field_monitors=[]              # No field monitors
-
-Running Simulations
--------------------
-
-Basic Execution
-^^^^^^^^^^^^^^^
-
-Run a simulation with standard settings:
-
-.. code-block:: python
-
-    # Setup is automatic during solver initialization
-    print("Solver configured, ready to run...")
-    
-    # Check resource requirements (optional)
-    solver.get_resources()
-    
-    # Run simulation
-    solver.run()
-    
-    # Check results
-    print(f"Simulation complete: {len(solver.sparameters.data)} S-parameters calculated")
-
-Tidy3D Cloud Execution
-^^^^^^^^^^^^^^^^^^^^^^^
-
-For Tidy3D simulations, monitor cloud execution:
-
-.. code-block:: python
-
-    # Run with monitoring
-    solver.run()  # Automatically handles cloud submission and monitoring
-    
-    # Results are automatically downloaded and processed
-    print("S-parameters ready for analysis")
-
-Error Handling
-^^^^^^^^^^^^^^
-
-Handle common simulation errors:
-
-.. code-block:: python
-
-    try:
-        solver.run()
-    except RuntimeError as e:
-        print(f"Simulation failed: {e}")
-        
-        # Check logs for detailed error information
-        solver.get_log()
-        
-        # Examine log files
-        import os
-        log_files = [f for f in os.listdir(solver.working_dir) if f.endswith('.log')]
-        if log_files:
-            print(f"Check log file: {log_files[0]}")
-    
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-
-Working Directory Structure
----------------------------
-
-The solver automatically creates a working directory structure:
-
-.. code-block:: text
-
-    simulation_results/
-    ├── component_name/
-    │   ├── component_name_timestamp.log    # Detailed simulation log
-    │   ├── component_name.gds              # Exported GDS with extensions
-    │   ├── component_name_sparams.dat      # S-parameters in .dat format
-    │   └── field_data/                     # Field monitor data (if any)
-
-Accessing the Working Directory
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    # Working directory information
-    print(f"Working directory: {solver.working_dir}")
-    
-    # List generated files
-    import os
-    for file in os.listdir(solver.working_dir):
-        print(f"Generated file: {file}")
-    
-    # Access log files
-    log_files = [f for f in os.listdir(solver.working_dir) if f.endswith('.log')]
-    if log_files:
-        with open(os.path.join(solver.working_dir, log_files[0]), 'r') as f:
-            log_content = f.read()
-            print("Simulation log preview:")
-            print(log_content[:500] + "...")
-
-More Options
-----------------------
-
-Custom Working Directory
-^^^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    import os
-    from datetime import datetime
-    
-    # Custom working directory with timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    custom_dir = f"./simulations/{component.name}_{timestamp}"
-    
-    solver = fdtd_solver_tidy3d(
-        working_dir=custom_dir,
-        # ... other parameters
-    )
-
-Simulation Time Control
-^^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    # Control simulation runtime
-    solver = fdtd_solver_tidy3d(
-        run_time_factor=5.0,    # Conservative (longer simulation)
-        # run_time_factor=2.0,  # Aggressive (shorter simulation)
-        # ... other parameters
-    )
-
-Memory and Performance
-^^^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-    # For large simulations, consider:
-    
-    # 1. Reduce wavelength points
-    wavelength_points=51  # Instead of 101
-    
-    # 2. Coarser mesh
-    mesh=12  # Instead of 15
-    
-    # 3. Smaller simulation domain
-    buffer=0.5  # Instead of 1.0
-    
-    # 4. Fewer field monitors
-    field_monitors=[]  # No field monitoring
-
-Troubleshooting
----------------
-
-Common Issues
-^^^^^^^^^^^^^
-
-**Port Detection Issues:**
-
-.. code-block:: python
-
-    # Check port extraction
-    if len(component.ports) == 0:
-        print("No ports found! Check:")
-        print("- Port layer in technology file")
-        print("- Port shapes in GDS file")
-        print("- GDS layer mapping")
-
-**Material Issues:**
-
-.. code-block:: python
-
-    # Verify materials are defined
-    for structure in component.structures:
-        if isinstance(structure, list):
-            for s in structure:
-                print(f"Structure {s.name}: material = {s.material}")
-        else:
-            print(f"Structure {structure.name}: material = {structure.material}")
-
-**Simulation Domain Issues:**
-
-.. code-block:: python
-
-    # Check simulation bounds
-    print(f"Component bounds: {component.bounds.x_span} × {component.bounds.y_span} μm")
-    print(f"Simulation domain: {solver.span[0]} × {solver.span[1]} × {solver.span[2]} μm")
-    print(f"Domain center: ({solver.center[0]}, {solver.center[1]}, {solver.center[2]}) μm")
-
-Validation Checklist
-^^^^^^^^^^^^^^^^^^^^^
-
-Before running simulations, verify:
-
-- [ ] GDS file loads without errors
-- [ ] Technology file matches GDS layers
-- [ ] Component has expected number of ports
-- [ ] Materials are properly defined
-- [ ] Wavelength range covers device operation
-- [ ] Mesh resolution is appropriate
-- [ ] Working directory is accessible
-- [ ] For Tidy3D: Valid account credentials
-
-Performance Tips
+Ship it anywhere
 ----------------
 
-- Start with coarse parameters for testing, then refine
-- Use symmetry when possible to reduce simulation size  
-- Monitor field data only when needed for analysis
-- Consider wavelength range vs. computational cost
-- Use appropriate mesh resolution for accuracy requirements
-- Enable logging to track simulation progress and debug issues 
+A simulation is a serializable job; any machine with the package is a
+worker (see :doc:`remote_compute`):
+
+.. code-block:: bash
+
+    gds-fdtd validate job.json
+    gds-fdtd estimate job.json
+    gds-fdtd run job.json --out results/
+
+Budgets (``max_flexcredits`` / ``max_wall_seconds``) are enforced before
+and during the run; secrets come from the environment only.

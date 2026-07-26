@@ -2,18 +2,18 @@
 
 
 [build-system]
-requires = ["flit_core>=3.2,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 # ────────────────────────── project meta ─────────────────────────
 [project]
 name            = "gds_fdtd"
-version         = "0.4.0"
-description     = "Minimalist utilities for photonic FDTD workflows."
+dynamic         = ["version"]
+description     = "EDA- and solver-agnostic 3D FDTD simulation framework for photonic layouts: GDS in, S-parameters, fields, and compact models out - tidy3d, Lumerical, or beamz behind one API."
 authors         = [{ name = "Mustafa Hammood", email = "mustafa@siepic.com" }]
 license         = { text = "MIT" }
 readme          = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.10,<3.14"
+requires-python = ">=3.11,<3.15"
 keywords        = [
   "python", "photonics", "fdtd", "simulation", "optics",
   "eda", "electromagnetics", "gds", "silicon-photonics"
@@ -22,58 +22,133 @@ keywords        = [
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Operating System :: OS Independent",
   "License :: OSI Approved :: MIT License",
 ]
 
 # ─────────────── core runtime (always installed) ───────────────
 dependencies = [
-  "numpy>=1.25",
-  "klayout>=0.30.1",
-  "matplotlib>=3.8",
-  "shapely>=2.0",
-  "PyYAML>=6.0"
+  "numpy>=2.4.6",
+  "klayout>=0.30.9",
+  "matplotlib>=3.11.0",
+  "shapely>=2.1.2",
+  "PyYAML>=6.0",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.14.2"
 ]
 
 # ──────────────── optional feature / tool sets ────────────────
+[project.scripts]
+gds-fdtd = "gds_fdtd.cli:main"
+
 [project.optional-dependencies]
 
-tidy3d      = ["tidy3d>=2.8.3,<2.9"]           # enables gds_fdtd.solver_tidy3d
+tidy3d      = ["tidy3d>=2.11,<3"]              # enables gds_fdtd.solver_tidy3d (2.8.x is numpy<2/py<=3.12 only; F5)
 gdsfactory  = ["gdsfactory>=9.5.7,<10"]
+beamz       = ["beamz>=0.4.3"]                 # open-source JAX FDTD engine
 prefab      = ["prefab>=1.2.0"]
-siepic      = ["SiEPIC>=0.5.25"]
+siepic      = ["SiEPIC>=0.5.31"]
+fuzz        = ["atheris>=3.1.0"]                 # run fuzz/ targets locally (CI uses ClusterFuzzLite)
+
+# convenience bundles (self-referential; Lumerical needs no extra, it uses your local lumapi)
+engines     = ["gds_fdtd[tidy3d,beamz]"]                             # every pip-installable FDTD engine
+all         = ["gds_fdtd[tidy3d,beamz,gdsfactory,prefab,siepic]"]    # every engine + layout frontend
 
 dev = [
-  "pip>=23.3",
-  "wheel>=0.42.0",
-  "build>=1.0.0",
-  "twine>=4.0.2",
-  "bump2version>=1.0.1",
-  "watchdog>=3.0.0",
+  "pip>=26.1.2",
+  "build>=1.0.0",  # `just build` (sdist+wheel); releases publish via CI trusted publishing
   "pytest>=8.1",
   "pytest-cov>=5.0",
   "coverage",
-  "ruff>=0.4.3",
-  "sphinx>=7.0",
-  "sphinx-rtd-theme>=1.2.0",
-  "docutils<0.23",
-  "sphinx-toggleprompt>=0.1.0",
-  "sphinx-copybutton>=0.5.2",
-  "sphinx-design>=0.5.0",
-  "furo>=2024.08.06"
+  "ruff>=0.15.22",
+  "codespell>=2.4.3",  # same spell check the CI prek hooks run
+  "mypy>=2.3.0",
+  "hypothesis>=6.100",  # property-based tests for the numeric core (WS2)
+  "h5py>=3.10",  # SMatrix HDF5 I/O tests (optional at runtime)
 ]
+
+docs = [
+  "sphinx>=9.0.4",
+  "docutils<0.24",
+  "sphinx-toggleprompt>=0.6.0",
+  "sphinx-copybutton>=0.5.2",
+  "myst-nb>=1.1",  # markdown docs + executed-notebook gallery (brings in myst-parser)
+  "sphinx-design>=0.7.0",
+  "furo>=2024.08.06",
+]
+
+# ─────────────── solver plugin entry points (WP3.1e) ───────────────
+[project.entry-points."gds_fdtd.solvers"]
+tidy3d    = "gds_fdtd.solvers.tidy3d:Tidy3DSolver"
+lumerical = "gds_fdtd.solvers.lumerical:LumericalSolver"
 
 # ───────────────────────── project links ────────────────────────
 [project.urls]
 Homepage    = "https://github.com/SiEPIC/gds_fdtd"
 Repository  = "https://github.com/SiEPIC/gds_fdtd"
 "Bug Tracker" = "https://github.com/SiEPIC/gds_fdtd/issues"
+Documentation = "https://siepic.github.io/gds_fdtd/"
+Changelog     = "https://github.com/SiEPIC/gds_fdtd/blob/main/CHANGELOG.md"
 
 # ─────────────────────────── tooling ────────────────────────────
-[tool.pytest.ini_options]
-# addopts = "--cov=."  # Disabled - pytest-cov not available
+[tool.hatch.version]
+source = "vcs"
 
-[tool.flake8]
-max-line-length = 88
+[tool.hatch.build.targets.wheel]
+packages = ["src/gds_fdtd"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+filterwarnings = [
+  "error::DeprecationWarning:gds_fdtd.*",
+]
+markers = [
+  "physics: runs a real solver engine locally (beamz) - slow but free",
+  "gpu: requires a CUDA GPU",
+  "cloud: spends cloud credits (tidy3d FlexCredits)",
+  "licensed: needs a Lumerical license + lumapi",
+  "slow: long-running (>30 s)",
+]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+# Two honest numbers (WS2 coverage arc, 2026-07-15, measured locally with
+# every extra installed; CI adds the no-lumapi probe path on top):
+#   base profile (no engine extras installed): the engine adapters genuinely
+#     cannot execute there; the floor below guards it.
+#   all-extras (the full package): 90.2% branch - the CI all-extras leg
+#     enforces >= 90 via --cov-fail-under=90, and codecov reports THIS number.
+# Ratchet upward only.
+fail_under = 75
+exclude_also = [
+  "pragma: no cover - requires (license|cloud|gpu)",
+]
+
+[tool.codespell]
+# TE/TM = transverse electric/magnetic (photonics); OD/TE show up in SVG path data
+ignore-words-list = "TE,te,TETM,tetm,subtrate,Subtrate"  # Subtrate: intentional legacy-typo tolerance in _is_background
+skip = "*.svg,*.gds,*.lock,*.ipynb,docs/_build,docs/_autosummary"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# examples/ are jupytext *percent* notebooks: imports follow the header +
+# markdown cells by design, which trips E402 — kept out of the main lint scope.
+# They are guarded instead by tests/test_examples_importable.py (imports resolve).
+extend-exclude = ["examples"]
+
+[tool.ruff.lint]
+# no ignores: the modernization arc's temporary ignore list (E501/B006/E722/
+# B904/F841/UP031) was worked off; keep it empty so new debt can't hide.
+select = ["E", "F", "W", "I", "UP", "B", "A", "C4"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+# no python_version pin: analyze under the running interpreter (numpy 2.x stubs need >=3.12)
+ignore_missing_imports = true
+check_untyped_defs = true

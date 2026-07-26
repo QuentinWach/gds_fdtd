@@ -1,0 +1,293 @@
+"""Offline tests for the ABC solver adapters (WP3.1c/d)."""
+
+from __future__ import annotations
+
+import pathlib
+
+import pytest
+
+from gds_fdtd.lyprocessor import load_cell
+from gds_fdtd.simprocessor import load_component_from_tech
+from gds_fdtd.solvers import get_solver
+from gds_fdtd.spec import SimulationSpec
+from gds_fdtd.technology import Technology
+
+TESTS_DIR = pathlib.Path(__file__).parent
+
+
+def _job(tech_file: str):
+    tech = Technology.from_yaml(str(TESTS_DIR / tech_file))
+    cell, layout = load_cell(str(TESTS_DIR / "si_sin_escalator.gds"))
+    comp = load_component_from_tech(cell=cell, tech=tech)
+    return comp, tech, layout
+
+
+# ---------------- LumericalSolver: pure .lsf generation ----------------
+
+
+@pytest.fixture(scope="module")
+def lum_artifacts(tmp_path_factory):
+    comp, tech, layout = _job("tech_lumerical.yaml")
+    solver = get_solver("lumerical")(
+        comp,
+        technology=tech,
+        spec=SimulationSpec(
+            wavelength_points=11,
+            mesh=6,
+            z_min=-1.0,
+            z_max=1.11,
+            boundary=("PML", "PML", "Metal"),
+            symmetry=(0, -1, 1),
+            modes=(1, 2),
+        ),
+        workdir=str(tmp_path_factory.mktemp("lum_abc")),
+    )
+    art = solver.build()
+    yield solver, art
+    del layout
+
+
+def test_lum_script_geometry_and_layers(lum_artifacts):
+    _, art = lum_artifacts
+    script = art.native
+    assert art.files["gds"].exists() and art.files["lsf"].exists()
+    # both device layers present in the escalator must be configured
+    assert '"layer number", "1:0"' in script
+    assert '"layer number", "1:5"' in script
+    assert 'setlayer("substrate", "background material", "SiO2 (Glass) - Palik");' in script
+    assert '"sidewall angle", 85' in script and '"sidewall angle", 83' in script
+
+
+def test_lum_script_boundaries_and_symmetry(lum_artifacts):
+    _, art = lum_artifacts
+    script = art.native
+    assert 'setnamed("FDTD", "z max bc", "Metal");' in script
+    assert 'setnamed("FDTD", "y min bc", "Anti-Symmetric");' in script
+    assert 'setnamed("FDTD", "z min bc", "Symmetric");' in script
+    assert 'setnamed("FDTD", "x min bc", "PML");' in script
+
+
+def test_lum_script_ports_and_sweep(lum_artifacts):
+    _, art = lum_artifacts
+    script = art.native
+    assert script.count("addport;") == 2
+    assert 'set("name", "opt1");' in script and 'set("name", "opt2");' in script
+    assert "updateportmodes([1;2]);" in script
+    # 2 ports x 2 modes = 4 sweep entries, all active (full matrix)
+    assert script.count('addsweepparameter("sparams", entry);') == 4
+    assert 'entry.Mode = "mode 2";' in script
+
+
+def test_lum_build_deterministic(lum_artifacts):
+    solver, art = lum_artifacts
+    assert solver.build().native == art.native
+
+
+def test_lum_validate_flags_missing_materials():
+    """Runs in the base (no-tidy3d) profile: strip lum_db from a lum tech copy
+    instead of loading tech_tidy3d.yaml (whose materials import tidy3d)."""
+    import copy
+
+    comp, tech, layout = _job("tech_lumerical.yaml")
+    bad = copy.deepcopy(tech.to_solver_dict())
+    for d in bad["device"]:
+        d["material"].pop("lum_db", None)  # leaves no source at all (v1 lum tech)
+    solver = get_solver("lumerical")(comp, technology=bad)
+    problems = solver.validate()
+    # with no eda / rii / nk source, lumerical reports it clearly
+    assert any("no optical-constant source" in p and "lumerical" in p for p in problems)
+    del layout
+
+
+# ---------------- Tidy3DSolver: validation surface ----------------
+
+
+def test_t3d_validate_flags_missing_tech():
+    pytest.importorskip("tidy3d")
+    comp, _tech, layout = _job("tech_lumerical.yaml")
+    solver = get_solver("tidy3d")(comp, technology=None)
+    assert any("technology" in p for p in solver.validate())
+    del layout
+
+
+# ---------------- BeamzSolver: validation surface (WP5.3) ----------------
+
+
+def test_beamz_accepts_klayout_sourced_geometry():
+    """A KLayout/SiEPIC-sourced component (no gdsfactory object) must NOT be
+    rejected for its source: beamz consumes gds_fdtd's extruded polygons through
+    a component shim, like every other adapter. Other v1 limits may still fire."""
+    pytest.importorskip("beamz")
+    comp, tech, layout = _job("tech_tidy3d.yaml")
+    solver = get_solver("beamz")(comp, technology=tech)  # no gf_component
+    problems = solver.validate()
+    assert not any("gdsfactory-sourced" in p for p in problems)
+    assert not any("KLayout-sourced" in p for p in problems)
+    del layout
+
+
+def test_beamz_validate_v1_mode_restriction():
+    pytest.importorskip("beamz")
+    comp, tech, layout = _job("tech_tidy3d.yaml")
+    solver = get_solver("beamz")(
+        comp, technology=tech, spec=SimulationSpec(modes=(1, 2)), gf_component=object()
+    )
+    problems = solver.validate()
+    assert any("modes=(1,)" in p for p in problems)
+    del layout
+
+
+def test_beamz_resolves_index_from_rii(tmp_path, monkeypatch):
+    """The rii material source feeds beamz with zero solver-specific entries."""
+    pytest.importorskip("beamz")
+    import copy
+    import pathlib as _pl
+
+    monkeypatch.setenv("GDS_FDTD_RII_DB", str(_pl.Path(__file__).parent / "rii_db"))
+    comp, tech, layout = _job("tech_tidy3d.yaml")
+    rii_tech = copy.deepcopy(tech.to_solver_dict())
+    # isolate the rii source on a single device layer ([1,0])
+    rii_tech["device"] = [rii_tech["device"][0]]
+    rii_tech["device"][0]["material"] = {"rii": {"shelf": "main", "book": "Si", "page": "Li-293"}}
+    solver = get_solver("beamz")(comp, technology=rii_tech, gf_component=object())
+    n_core, _ = solver._indices()
+    assert n_core == pytest.approx(3.4757, abs=0.01)
+    del layout
+
+
+def test_beamz_multilayer_escalator_builds():
+    """Multi-layer stacks build on beamz: the Si→SiN escalator (two device
+    layers, ports at different z) validates and rasterizes BOTH cores, not one."""
+    pytest.importorskip("beamz")
+    import copy
+
+    import numpy as np
+
+    comp, tech, layout = _job("tech_tidy3d.yaml")  # escalator: Si [1,0] + SiN [1,5]
+    two = copy.deepcopy(tech.to_solver_dict())
+    # give both device layers a neutral nk so the free engine resolves them
+    two["device"][0]["material"] = {"nk": 3.476}  # Si core
+    two["device"][1]["material"] = {"nk": 1.997}  # SiN core
+    two["superstrate"][0]["material"] = {"nk": 1.444}  # SiO2 cladding
+    solver = get_solver("beamz")(
+        comp,
+        technology=two,
+        spec=SimulationSpec(wavelength_points=3, mesh=5, z_min=-1.0, z_max=1.11),
+    )
+    assert len(solver._device_layers()) == 2  # multi-layer accepted (v1 rejected this)
+    assert solver.validate() == []
+    n = np.sqrt(np.asarray(solver.build().native["grid"].permittivity))
+    assert float(n.max()) > 3.4  # Si core present
+    assert bool(np.any((n > 1.9) & (n < 2.1)))  # SiN core present, distinct from Si/clad
+    del layout
+
+
+def test_beamz_honors_large_buffer():
+    """beamz honors a spec.buffer LARGER than its physical guard-band floor
+    (SimulationSpec.buffer is documented as the domain padding; beamz used to
+    ignore it entirely). buffer <= the floor (incl. the default) is unchanged;
+    a larger buffer grows the in-plane domain, hence the rasterized grid."""
+    pytest.importorskip("beamz")
+    import copy
+
+    import numpy as np
+
+    comp, tech, layout = _job("tech_tidy3d.yaml")
+    two = copy.deepcopy(tech.to_solver_dict())
+    two["device"][0]["material"] = {"nk": 3.476}
+    two["device"][1]["material"] = {"nk": 1.997}
+    two["superstrate"][0]["material"] = {"nk": 1.444}
+
+    def cells(buf: float) -> int:
+        solver = get_solver("beamz")(
+            comp,
+            technology=two,
+            spec=SimulationSpec(wavelength_points=3, mesh=5, z_min=-1.0, z_max=1.11, buffer=buf),
+        )
+        return int(np.asarray(solver.build().native["grid"].permittivity).size)
+
+    default = cells(1.0)  # below the ~3 um floor
+    at_floor = cells(3.0)  # still at the floor
+    larger = cells(6.0)  # above the floor -> bigger domain
+    assert default == at_floor  # buffer <= floor is a no-op (no regression)
+    assert larger > default  # a larger buffer is now honored
+    del layout
+
+
+def test_beamz_honors_z_window():
+    """Engine parity (the 06 audit): beamz honors spec.z_min/z_max when the
+    requested z-window exceeds its own cladding floor (~1 um beyond the stack),
+    exactly like the buffer rule. The default window is within the floor for
+    the escalator, so it stays a no-op; a deeper window grows the grid in z."""
+    pytest.importorskip("beamz")
+    import copy
+
+    comp, tech, layout = _job("tech_tidy3d.yaml")
+    two = copy.deepcopy(tech.to_solver_dict())
+    two["device"][0]["material"] = {"nk": 3.476}
+    two["device"][1]["material"] = {"nk": 1.997}
+    two["superstrate"][0]["material"] = {"nk": 1.444}
+
+    def depth(z_min: float, z_max: float) -> float:
+        solver = get_solver("beamz")(
+            comp,
+            technology=two,
+            spec=SimulationSpec(wavelength_points=3, mesh=5, z_min=z_min, z_max=z_max),
+        )
+        return float(solver.build().native["design"].depth)
+
+    default = depth(-1.0, 1.11)  # within the floor -> unchanged geometry
+    same = depth(-0.5, 0.9)  # smaller window: floor still wins (no shrink)
+    deeper = depth(-3.0, 3.0)  # beyond the floor -> honored
+    assert default == pytest.approx(same)
+    assert deeper > default + 3.0e-6  # ~2 + ~1.9 um more cladding requested
+    del layout
+
+
+def test_beamz_field_plane_orientation():
+    """beamz grids are (z, y, x)-ordered: a synthetic along-x stripe injected
+    through the run() reshape convention must render along x (caught a real
+    transposed field plot during live validation)."""
+    pytest.importorskip("beamz")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import numpy as np
+
+    from gds_fdtd.solvers.beamz import BeamzSolver
+
+    ny, nx = 116, 197
+    flat = np.zeros((1, ny * nx), dtype=complex)
+    flat.reshape(1, ny, nx)[0, ny // 2 - 5 : ny // 2 + 5, :] = 1.0
+
+    s = object.__new__(BeamzSolver)
+    ncells = ny * nx
+    s._field_z = {
+        c: flat.reshape(-1)[:ncells].reshape(ncells // nx, nx) for c in ("Ex", "Ey", "Ez")
+    }
+    s._field_z_meta = {"width_um": 11.0, "height_um": 6.5, "source": "o1"}
+    _, ax = s.plot_fields(axis="z")
+    img = np.asarray(ax.images[0].get_array())
+    assert img.shape == (ny, nx)
+    assert (img.sum(axis=1) > 0).sum() == 10  # stripe occupies 10 y-rows
+    assert (img.sum(axis=0) > 0).all()  # and spans every x column
+
+
+def test_beamz_rejects_y_oriented_ports():
+    """F14: beamz modal normalization on y-normal monitors is wrong by tens
+    of dB (measured S11 +40 dB on a vertical straight) - validate() must
+    fail loudly instead of run() returning garbage."""
+    pytest.importorskip("beamz")
+    gf = pytest.importorskip("gdsfactory")
+    gf.gpdk.PDK.activate()
+    from gds_fdtd.layout.gdsfactory import from_gdsfactory
+    from gds_fdtd.technology import Technology
+
+    c = gf.Component(name="vstraight_f14")
+    ref = c.add_ref(gf.components.straight(length=5))
+    ref.rotate(90)
+    c.add_ports(ref.ports)
+    tech = Technology.from_yaml(str(TESTS_DIR / "tech_unified.yaml"))
+    comp = from_gdsfactory(c, tech)
+    problems = get_solver("beamz")(comp, technology=tech).validate()
+    assert any("F14" in p for p in problems), problems

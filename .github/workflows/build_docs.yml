@@ -1,39 +1,56 @@
-name: Deploy Sphinx Docs to GitHub Pages
+name: Deploy Docs to GitHub Pages
+
+# Official artifact-based Pages flow (replaces peaceiris branch-based deploys,
+# which created a legacy "pages build and deployment" run — and an extra
+# github-pages deployment record — on every push to main).
+#
+# NOTE (owner action at merge time): switch the repo's Pages source to
+# "GitHub Actions" (Settings → Pages, or
+#   gh api -X PUT repos/SiEPIC/gds_fdtd/pages -f build_type=workflow
+# ) and delete the gh-pages branch. Do this when this workflow reaches main,
+# not before — the old peaceiris flow keeps docs alive until then.
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.13"
+      - run: uv sync --locked --extra docs
+      - run: uv run sphinx-build -b html docs docs/_build/html
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: docs/_build/html
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-
-    - name: Install dependencies
-      run: |
-        pip install --upgrade pip
-        pip install .[dev]
-
-    - name: Build documentation
-      run: |
-        cd docs
-        make html
-
-    - name: Deploy to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v4
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: docs/_build/html
-        force_orphan: true
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
