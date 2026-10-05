@@ -5,10 +5,105 @@ should be able to read this, understand the current state, and pick up work
 without losing context. Keep it current; move granular tracking to GitHub
 Issues as items are picked up.
 
-## Where we are — v0.6.1 (released 2026-07-21)
+## Where we are — v0.7.0
 
-`v0.6.1` is tagged with a signed GitHub release (Sigstore bundles + SBOM),
-building on `v0.6.0` (2026-07-15). It adds the interactive 3D viewer
+**Release 0.7.0 (2026-10-05):** PR #154 has merged, completing the BeamZ 0.5.3
+adapter migration and the tolerance-qualified S-bend convergence study below.
+The final Dependabot updates move mypy to 2.4.0, Ruff and its hook to 0.16.10,
+and the SHA-pinned Codecov action to 7.1.1, with a synchronized lock.
+The pre-release dependency-floor check also requires an explicit coverage >=7.10.6
+floor (pytest-cov's minimum) to avoid selecting legacy Python 2 source packages.
+The minor version marks the engine API migration and changed numerical behavior;
+the supported BeamZ range is >=0.5.3,<0.6. See the 0.7.0 changelog for the
+dependency, security, and numerical scope. Releases use the tag-driven workflow
+to build inspected packages, Sigstore signatures, and an SBOM; PyPI publication
+still needs verification through that workflow.
+
+**Maintenance review (2026-10-04):** the compatible Dependabot updates are
+consolidated with a fresh lock and security fixes for Tornado (6.5.10),
+urllib3 (2.8.0), and PyJWT (2.15.1).
+The initial batch landed in #155; follow-up proposals #156–#158 bring
+setup-uv to 10.2.0, CodeQL SARIF to 4.38.2, and hypothesis to 6.168.3.
+The temporary BeamZ <0.5 hold from maintenance is superseded by the validated
+0.5.3 migration below; Dependabot defers >=0.6 pending API validation.
+Pydantic's >=2.13.5 floor remains deferred: gdsfactory 9.45.0 is the last supported version on Python 3.11,
+and its kfactory dependency requires Pydantic <2.13. The fuzz extra is
+restricted to Linux x86_64/Python >=3.12 to match available Atheris wheels without
+reducing the package's supported Python/platform range. See the 0.7.0
+changelog for the complete maintenance scope.
+
+**BeamZ migration (2026-10-04; PR #154 merged):** the adapter now supports
+`beamz>=0.5.3,<0.6` (locked to 0.5.3), with immutable ports/sources/monitors
+and detached modal/field results. Canonical polygons replace the removed
+0.4 geometry helper; preparation stays on the CPU. The 0.5.0/0.5.1/0.5.2
+release matrix runs locally on the RTX 3090; reproducible scripts, full
+S-matrix magnitudes, convergence diagnostics, and plots live in
+[`benchmarks/`](benchmarks/README.md). The historical 0.4.3 recordings remain
+unchanged. TE fundamental mode and x-facing ports remain the validated
+adapter scope; y-facing ports, TM, and multimode need separate validation.
+
+**Reviewer-requested convergence study completed (2026-10-04):** the fixed-setup
+BeamZ 0.5.3 S-bend sweep covers meshes 10/14/20/25/30 on RTX 3090. Both final
+through-path changes pass the predeclared 0.05 dB tolerance: 0.02655 dB
+(20→25) and 0.03720 dB (25→30), across both directions and all three wavelength
+samples. The mesh-30 uniform-lead probe spread is 0.01371 dB at 1.55 µm and
+0.00904–0.01752 dB across its three wavelengths. Reflections do not meet the
+same convergence tolerance (all-entry final change 0.50777 dB); complex phase,
+PML/domain convergence, and other device families remain outside this claim.
+[Report, plots, and reproduction](benchmarks/BEAMZ_CONVERGENCE.md).
+[Example 06](examples/06_convergence_and_caching/06_convergence_and_caching.ipynb)
+now replays the 0.5.3 JSON records with editable convergence and monitor plots,
+checks the reported criteria, and labels the older 0.4.3 figures as historical.
+The notebook also compares the mesh-30 0.5.3 field intensity with the recorded
+commercial fields in linear/log views, using a portable cropped JSON map
+with source provenance; no new complex NPZ archives are committed.
+PR #154 has merged; generated NPZ archives stay local.
+
+**BeamZ 0.5.3 fix verified (2026-10-04):** the released material-snapshot
+correction works through the integration without adapter changes. Exact probes
+reduce uniform-lead monitor spread from 0.315 to 0.097 dB at mesh 10 and from
+0.130 to 0.027 dB at mesh 20. The specific upstream defect is addressed;
+residual numerical sensitivity and absolute mesh convergence remain separate
+validation concerns. Full mesh-10 y-branch/escalator matrices and mesh-10/20
+S-bend runs also pass finite, incident-power, and temporal-convergence checks.
+After merging the upstream maintenance/security updates and requiring
+BeamZ >=0.5.3, the local suite passes (372 passed, 27 skipped); repository-wide
+lint/formatting, spelling, strict source typing, and lock checks pass. The migration
+has merged within its fundamental-TE/x-facing scope; extra convergence
+studies are follow-up accuracy work, not an unresolved upstream-fix blocker.
+The [follow-up report](benchmarks/BEAMZ_053_RESULTS.md)
+contains versioned JSON/plot artifacts; original 0.5.2 measurements are preserved.
+Generated `.npz` archives are excluded from Git and can be recreated by the
+benchmark scripts; the duplicated upstream issue body is linked on GitHub.
+
+**Device validation completed (2026-10-04):** fresh RTX 3090 / BeamZ 0.5.2
+runs cover the sharp S-bend (meshes 6/10/14/20), full three-port y-branch,
+and Si→SiN escalator (meshes 6/10). Forward y-branch paths agree within
+0.05 dB and escalator transmission within 0.09 dB of recorded commercial
+results; weak matrix entries still differ. The y-branch reverse paths work.
+On 0.5.2, S-bend monitor-plane sensitivity remained unresolved: a mesh-20
+probe varies by 0.130 dB along the straight output lead. Filed
+[BeamZ #309](https://github.com/beamzorg/beamz/issues/309) with a verified
+standalone reproducer. [Results and reproduction](benchmarks/DEVICE_RESULTS.md)
+include full matrices, fields, convergence diagnostics, and limitations.
+No fresh cloud or licensed runs were performed.
+
+
+`v0.6.3` is a maintenance release over `v0.6.2`: dependency floors and pinned
+GitHub Actions moved to current releases (including `setup-uv` v10, whose new
+cache-poisoning default is a no-op here). No API change. The `pip-audit`
+exception from 0.6.2 still stands — tidy3d remains at 2.12.0, so #115's exit
+criteria are unmet.
+
+`v0.6.2` is the maintenance release beneath it, over `v0.6.1`: dependency floors raised to
+current releases, a protective `beamz < 0.5` cap ahead of that project's
+breaking 0.5 API (#85), and a documented `pip-audit` exception for three
+`cryptography` advisories that cannot be remediated while tidy3d 2.12 pins
+`cryptography==48.0.1` (#115). No API change.
+
+`v0.6.1` (2026-07-21) is the feature release beneath it, tagged with a signed
+GitHub release (Sigstore bundles + SBOM) and building on `v0.6.0`
+(2026-07-15). It adds the interactive 3D viewer
 (`viewer3d.show_3d` / `save_3d` / `render_static`), steerable field monitors
 (`field_monitor_positions` / `field_monitor_wavelengths`, `plot_monitor_planes`),
 and examples `05b_field_monitors` + `11_bragg_grating`; it hardens the viewer
@@ -132,11 +227,11 @@ Not committed; a palette to choose from. Roughly ordered by impact.
       linear history required, force-pushes blocked, admins enforced.
 - [x] **Pages source = GitHub Actions** — the artifact-based docs deploy is live.
 - [ ] **PyPI trusted publisher** (project `gds_fdtd`, owner `SiEPIC`,
-      workflow `release.yml`, env `pypi`) — in progress with Lukas; until it
-      lands, tagged releases produce signed GitHub artifacts but the PyPI
-      publish step cannot run (re-verified 2026-07-21: `invalid-publisher`,
-      PyPI still serves 0.4.0). Once registered, re-run the failed publish job
-      of the latest (v0.6.1) Release run.
+      workflow `release.yml`, env `pypi`) — PyPI still serves 0.4.0
+      (rechecked 2026-10-05). The v0.6.3 publish job failed with
+      `invalid-publisher`; tagged releases produce signed GitHub artifacts
+      independently of this step. Verify publisher registration and re-run the
+      latest failed publish job after setup; no API-token fallback is used.
 - [ ] **OpenSSF Best Practices badge** — register at bestpractices.dev.
 - [ ] **`cloud-tests` environment** with a required reviewer (guards the
       budget-gated tidy3d smoke).

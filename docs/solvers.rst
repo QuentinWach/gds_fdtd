@@ -55,7 +55,7 @@ Available engines
      - execution
      - cost
      - install
-   * - `Tidy3D <https://github.com/flexcompute/tidy3d>`_ >= 2.11
+   * - `Tidy3D <https://github.com/flexcompute/tidy3d>`_ >= 2.12
      - cloud
      - FlexCredits
      - ``pip install gds_fdtd[tidy3d]`` + ``TIDY3D_API_KEY``
@@ -63,7 +63,7 @@ Available engines
      - local
      - license
      - Lumerical install with ``lumapi`` on path
-   * - `beamz <https://github.com/beamzorg/beamz>`_ >= 0.4
+   * - `beamz <https://github.com/beamzorg/beamz>`_ >= 0.5.3, < 0.6
      - local (JAX CPU/GPU)
      - free
      - ``pip install gds_fdtd[beamz]``

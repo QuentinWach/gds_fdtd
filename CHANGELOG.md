@@ -5,6 +5,117 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.7.0] - 2026-10-05
+
+BeamZ integration release: migrate to the validated 0.5 API and numerical
+fixes, with reproducible convergence evidence and dependency maintenance.
+BeamZ installations must upgrade to >=0.5.3,<0.6; the adapter no longer
+supports BeamZ 0.4.3. Fundamental TE and x-facing ports remain the validated scope.
+
+### Changed
+- Migrate the BeamZ adapter to the 0.5 immutable source/monitor/result API;
+  support `beamz>=0.5.3,<0.6` and lock 0.5.3. Geometry now comes directly from
+  canonical component polygons, including multilayer port extensions. Build
+  and estimate use CPU rasterization; only run constructs a simulation.
+- Keep port measurement planes fixed across excitation columns, with sources
+  in the uniform extensions. Read field-plane dimensions from the result's
+  exact sampling region.
+- Use mesh 6 for the short real-engine regression: mesh 5 exceeds the original
+  reciprocity tolerance on BeamZ 0.5; the tolerance itself is unchanged.
+- Verify the BeamZ 0.5.3 material-snapshot fix for upstream #309: the mesh-20
+  uniform-lead monitor spread falls from 0.130 to 0.027 dB. Preserve the
+  0.5.2 baseline and document remaining numerical sensitivity.
+- Add a reproducible RTX 3090 integration benchmark with versioned results
+  and comparisons to the historical three-engine straight-waveguide data.
+- Apply the compatible Dependabot maintenance updates: klayout >=0.30.12,
+  matplotlib >=3.11.2, build >=1.6.1, mypy >=2.4.0, hypothesis >=6.168.3,
+  and ruff >=0.16.10; sync the Ruff hook and regenerate `uv.lock`.
+- Declare coverage >=7.10.6, matching pytest-cov's requirement, so dependency-floor
+  installs avoid unsupported Python 2 source packages.
+- Update the pinned setup-uv, deploy-pages, action-gh-release, CodeQL SARIF,
+  alls-green, and Codecov actions, retaining full commit SHA pins.
+  Include the follow-up setup-uv 10.2.0 and CodeQL SARIF 4.38.2 proposals
+  generated after the initial maintenance merge, plus Codecov 7.1.1.
+- Restrict the optional Atheris fuzz dependency to Linux x86_64 on Python >=3.12,
+  where its supported wheels are available, so universal dependency resolution
+  preserves the package's Python 3.11 and cross-platform support.
+- Replace the temporary BeamZ <0.5 cap with >=0.5.3,<0.6 after validating
+  the adapter migration and upstream modal-analysis fix. Defer the Pydantic >=2.13.5 floor because
+  the Python 3.11 gdsfactory/kfactory dependency graph requires Pydantic <2.13.
+
+### Security
+- Upgrade locked Tornado from 6.5.7 to 6.5.10, urllib3 from 2.7.0 to 2.8.0,
+  and PyJWT from 2.13.0 to 2.15.1 to remediate newly reported advisories;
+  upgrade soupsieve to 2.9. Retain the existing scoped cryptography exceptions.
+- Update alls-green to 1.3.0, which fixes GHSA-gj76-h2ch-5m76.
+
+## [0.6.3] - 2026-08-19
+
+Maintenance release: dependency floors and pinned GitHub Actions moved to
+current releases. No API or behavioural change to the package — code written
+against 0.6.2 keeps working.
+
+### Changed
+- Dependency floors raised, with `uv.lock` re-synced:
+  - runtime: pydantic-settings >= 2.15.0
+  - dev: ruff >= 0.16.3, hypothesis >= 6.165.10, pip >= 26.2.1
+- Pinned GitHub Actions bumped: `setup-uv` v10.0.1 and
+  `codeql-action/upload-sarif` 4.37.7.
+  `setup-uv` v10 disables the cache by default for `pull_request_target`,
+  `workflow_run` and `release` events as cache-poisoning protection; that is a
+  no-op here, since the workflows that care set `enable-cache` explicitly
+  (`true` in CI, `false` in the publishing job) and none of those three
+  triggers is used in this repository.
+
+### Security
+- The `pip-audit` exception for the three `cryptography` advisories
+  (CVE-2026-69247 high, plus 69248/69249) documented in 0.6.2 still stands:
+  tidy3d remains at 2.12.0, which pins `cryptography==48.0.1` exactly, so the
+  exit criteria in #115 are not yet met. Re-checked at release time rather
+  than assumed. The vulnerable PKCS#7 API remains unreferenced by authlib,
+  tidy3d and this package.
+
+## [0.6.2] - 2026-08-04
+
+Maintenance release: dependency floors, a protective cap on beamz, and a
+documented security exception. No API changes and no behavioural changes to
+the package itself — code written against 0.6.1 keeps working.
+
+### Changed
+- Cap the optional beamz dependency below 0.5 until the adapter is migrated to
+  beamz's backward-incompatible 0.5 API (#85).
+- Dependency floors raised to current releases, with `uv.lock` re-synced:
+  - runtime: klayout ≥ 0.30.10, matplotlib ≥ 3.11.1, PyYAML ≥ 6.0.3
+  - extras: tidy3d ≥ 2.12.0 (still `<3`), gdsfactory ≥ 9.45.0 (still `<10`),
+    prefab ≥ 1.6.0
+  - dev: pytest ≥ 9.1.1, pytest-cov ≥ 7.1.0, ruff ≥ 0.16.1,
+    hypothesis ≥ 6.164.0, h5py ≥ 3.16.0, build ≥ 1.5.0, pip ≥ 26.2
+  - docs: myst-nb ≥ 1.4.0, furo ≥ 2025.12.19
+- Pinned GitHub Actions bumped to current releases (setup-uv v9,
+  download-artifact v8, build-and-inspect-python-package v3, prek-action v3,
+  sigstore-python 3.5.0, checkout, codeql-action, scorecard, pypi-publish).
+  The two majors on the release path were checked against how we use them:
+  `build-and-inspect` v3 keeps an identical `Packages` artifact contract, and
+  the actions dropping floating `@vN` tags are unaffected here because every
+  action is pinned by commit SHA.
+
+### Security
+- `pip-audit` reports three advisories against `cryptography` 48.0.1 —
+  **CVE-2026-69247** (high; a Bleichenbacher oracle in PKCS#7 EnvelopedData
+  decryption), CVE-2026-69248 and CVE-2026-69249. They cannot be remediated
+  downstream: tidy3d 2.12.0 declares an exact `cryptography==48.0.1` pin, and
+  re-locking under a `cryptography>=50` constraint reports the requirements as
+  unsatisfiable.
+  The vulnerable API is not reachable from this package — authlib 1.7.2 and
+  tidy3d 2.12.0 each contain zero references to `serialization.pkcs7`, and
+  gds_fdtd never imports `cryptography` at all — so the three ids are ignored
+  explicitly in the security workflow, with the reasoning inline and exit
+  criteria tracked in #115. Every other advisory still fails that job.
+  Capping `tidy3d < 2.12` remains a one-line alternative that restores a fully
+  clean audit at the cost of holding users on 2.11.2.
+
 ## [0.6.1] - 2026-07-21
 
 ### Added

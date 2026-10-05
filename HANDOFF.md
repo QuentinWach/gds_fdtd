@@ -6,18 +6,28 @@ the compressed history and the working conventions; the live plan is
 [`SOLVER_STATUS.md`](SOLVER_STATUS.md), and user-facing docs live at
 <https://siepic.github.io/gds_fdtd/>.
 
-**State:** `v0.6.1` is released (tagged 2026-07-21, signed GitHub release).
-It adds the interactive 3D viewer (`gds_fdtd.viewer3d.show_3d`), steerable and
-visible field monitors (`SimulationSpec.field_monitor_positions` /
+**State:** the `v0.7.0` release (2026-10-05) integrates the merged BeamZ 0.5.3
+adapter, fixed measurement planes, exact field sampling dimensions, and the
+recorded S-bend convergence study. The final two through-path refinements pass
+0.05 dB; reflections and complex phase need further accuracy work. Validated
+scope remains fundamental TE and x-facing ports. Dependency maintenance includes
+mypy 2.4.0, Ruff 0.16.10, Codecov 7.1.1, and the synchronized lock. Signed
+GitHub packages and an SBOM come from the tag-driven release workflow; PyPI
+publication is still unverified (PyPI serves 0.4.0, rechecked 2026-10-05).
+`v0.6.3` and `v0.6.2` were maintenance releases; their temporary BeamZ `<0.5`
+cap is superseded. The documented `pip-audit` exception remains tracked in #115.
+The feature content beneath these came in `v0.6.1` (2026-07-21): the
+interactive 3D viewer (`gds_fdtd.viewer3d.show_3d`), steerable and visible
+field monitors (`SimulationSpec.field_monitor_positions` /
 `field_monitor_wavelengths`, `plot_monitor_planes`), and two examples
-(`05b_field_monitors`, `11_bragg_grating`) on top of `v0.6.0` (2026-07-15).
+(`05b_field_monitors`, `11_bragg_grating`), on top of `v0.6.0` (2026-07-15).
 The three engines were validated **live** against each other during the 0.6
 arc — tidy3d ↔ Lumerical within 0.0033 dB, beamz within 0.052 dB on the
 identical job — and that agreement is locked into CI through recorded
 artifacts. All-extras branch coverage is ≥90 (gated), `mypy --strict` passes
 on the whole package (required check), and the examples are 15 executed
-notebooks with committed outputs. The one loose end is the PyPI trusted
-publisher (owner action; PyPI still serves 0.4.0 — see ROADMAP).
+notebooks with committed outputs. The outstanding publishing setup is the PyPI
+trusted publisher (external account configuration — see ROADMAP).
 
 ## 1. What gds_fdtd is (one screen)
 
@@ -28,8 +38,8 @@ S-matrix:
 ```python
 from gds_fdtd import get_solver, SimulationSpec, Technology
 
-solver  = get_solver("tidy3d" | "lumerical" | "beamz")(component, tech, SimulationSpec())
-smatrix = solver.run()          # the ONLY call that spends money / license / GPU
+solver = get_solver("tidy3d" | "lumerical" | "beamz")(component, tech, SimulationSpec())
+smatrix = solver.run()  # the ONLY call that spends money / license / GPU
 ```
 
 EDA-agnostic on the front (KLayout/SiEPIC, gdsfactory ≥9), solver-agnostic on
